@@ -69,13 +69,20 @@
       font-size: 11px;
     }
 
-    @keyframes pulseSVG {
-      0% { stroke-width: 2; fill-opacity: 0.8; }
-      50% { stroke-width: 6; fill-opacity: 0.2; }
-      100% { stroke-width: 2; fill-opacity: 0.8; }
+    /* Cerchio pulsante ad alto contrasto visibile su sfondo scuro/radar */
+    @keyframes pulseCircle {
+      0% { transform: scale(1); opacity: 0.9; }
+      50% { transform: scale(1.4); opacity: 0.4; }
+      100% { transform: scale(1); opacity: 0.9; }
     }
-    .storm-circle-svg {
-      animation: pulseSVG 1.2s infinite ease-in-out;
+    .storm-pulse-node {
+      width: 14px;
+      height: 14px;
+      background: #f43f5e;
+      border: 2px solid #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 0 8px #f43f5e;
+      animation: pulseCircle 1s infinite ease-in-out;
     }
   </style>
 </head>
@@ -104,7 +111,7 @@
 
   <script>
     const continents = {
-      europa: { center: [50.0, 10.0], zoom: 4 },
+      europa: { center: [48.0, 5.0], zoom: 5 },
       nord_america: { center: [40.0, -98.0], zoom: 4 },
       sud_america: { center: [-15.0, -60.0], zoom: 4 },
       asia: { center: [25.0, 100.0], zoom: 4 },
@@ -175,19 +182,24 @@
       if (!currentRadarPath) return;
 
       const bounds = map.getBounds();
-      const zoom = Math.min(Math.max(map.getZoom(), 3), 6);
+      // Zoom di scansione fisso a 5 per far combaciare esattamente Pixel e Lat/Lon
+      const scanZoom = 5;
 
-      const nw = map.project(bounds.getNorthWest(), zoom).divideBy(256).floor();
-      const se = map.project(bounds.getSouthEast(), zoom).divideBy(256).floor();
+      const nwPoint = map.project(bounds.getNorthWest(), scanZoom);
+      const sePoint = map.project(bounds.getSouthEast(), scanZoom);
 
-      let count = 0;
-      const foundPoints = [];
+      const minTileX = Math.floor(nwPoint.x / 256);
+      const maxTileX = Math.floor(sePoint.x / 256);
+      const minTileY = Math.floor(nwPoint.y / 256);
+      const maxTileY = Math.floor(sePoint.y / 256);
 
-      for (let x = nw.x; x <= se.x; x++) {
-        for (let y = nw.y; y <= se.y; y++) {
+      let totalCells = 0;
+      const points = [];
+
+      for (let x = minTileX; x <= maxTileX; x++) {
+        for (let y = minTileY; y <= maxTileY; y++) {
           
-          const tileUrl = `https://tilecache.rainviewer.com${currentRadarPath}/256/${zoom}/${x}/${y}/2/1_1.png`;
-          // Proxy CORS per sbloccare l'accesso ai pixel nell'iframe di Google Sites
+          const tileUrl = `https://tilecache.rainviewer.com${currentRadarPath}/256/${scanZoom}/${x}/${y}/2/1_1.png`;
           const proxiedUrl = `https://corsproxy.io/?${encodeURIComponent(tileUrl)}`;
 
           const img = new Image();
@@ -204,45 +216,45 @@
             try {
               const pixelData = ctx.getImageData(0, 0, 256, 256).data;
 
-              for (let px = 0; px < 256; px += 8) {
-                for (let py = 0; py < 256; py += 8) {
+              for (let px = 0; px < 256; px += 10) {
+                for (let py = 0; py < 256; py += 10) {
                   const idx = (py * 256 + px) * 4;
                   const r = pixelData[idx];
                   const g = pixelData[idx + 1];
                   const b = pixelData[idx + 2];
                   const a = pixelData[idx + 3];
 
-                  if (a < 50) continue;
+                  if (a < 60) continue;
 
-                  // Riflettività ≥32 dBZ (Giallo, Arancio, Rosso, Viola)
-                  const isYellow = (r > 200 && g > 170 && b < 100);
-                  const isOrange = (r > 210 && g >= 90 && g <= 170 && b < 80);
-                  const isRedPurple = (r > 180 && g < 90);
+                  // Filtro cromatico rigido per dBZ >= 32
+                  const isYellow = (r > 200 && g > 165 && b < 100);
+                  const isOrange = (r > 210 && g >= 85 && g <= 165 && b < 80);
+                  const isRedPurple = (r > 175 && g < 85);
 
                   if (isYellow || isOrange || isRedPurple) {
-                    const gx = x * 256 + px;
-                    const gy = y * 256 + py;
-                    const latLng = map.unproject([gx, gy], zoom);
+                    const globalX = x * 256 + px;
+                    const globalY = y * 256 + py;
+                    
+                    // Conversione diretta da Coordinate Globali Pixel a Lat/Lon Leaflet
+                    const latLng = map.unproject([globalX, globalY], scanZoom);
 
-                    const isDuplicate = foundPoints.some(p => map.distance(p, latLng) < 25000);
+                    const tooClose = points.some(p => map.distance(p, latLng) < 20000);
 
-                    if (!isDuplicate) {
-                      foundPoints.push(latLng);
-                      count++;
+                    if (!tooClose) {
+                      points.push(latLng);
+                      totalCells++;
 
-                      const circle = L.circleMarker(latLng, {
-                        radius: 8,
-                        color: '#f43f5e',
-                        fillColor: '#f43f5e',
-                        fillOpacity: 0.6,
-                        weight: 2,
-                        className: 'storm-circle-svg'
+                      const pulseIcon = L.divIcon({
+                        className: 'storm-pulse-node',
+                        iconSize: [14, 14],
+                        iconAnchor: [7, 7]
                       });
 
-                      circle.bindPopup(`<b>Nucleo Convettivo Rilevato</b><br>Riflettività: ≥32 dBZ<br>Lat: ${latLng.lat.toFixed(2)} | Lon: ${latLng.lng.toFixed(2)}`);
-                      markersGroup.addLayer(circle);
+                      const marker = L.marker(latLng, { icon: pulseIcon });
+                      marker.bindPopup(`<b>Nucleo Convettivo</b><br>Riflettività: ≥32 dBZ<br>Lat: ${latLng.lat.toFixed(2)} | Lon: ${latLng.lng.toFixed(2)}`);
+                      markersGroup.addLayer(marker);
 
-                      document.getElementById('cell-count').innerText = count;
+                      document.getElementById('cell-count').innerText = totalCells;
                     }
                   }
                 }
