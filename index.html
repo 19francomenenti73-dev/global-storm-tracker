@@ -170,7 +170,6 @@
       stormGroup.clearLayers();
       if (!currentPath) return;
 
-      // Usiamo il livello di zoom corrente della mappa per sincronizzare perfettamente i pixel con la griglia Leaflet
       const currentZoom = Math.min(Math.max(map.getZoom(), 3), 7); 
       const bounds = map.getBounds();
 
@@ -188,22 +187,21 @@
         for (let y = minY; y <= maxY; y++) {
           
           const tileImg = new Image();
-          tileImg.crossOrigin = "Anonymous";
+          tileImg.crossOrigin = "anonymous";
           
-          // Uso del proxy CORS affidabile direttamente sulla mattonella radar
-          tileImg.src = `https://corsproxy.io/?${encodeURIComponent(`https://tilecache.rainviewer.com${currentPath}/256/${currentZoom}/${x}/${y}/2/1_1.png`)}`;
+          // Chiamata diretta CDN RainViewer abilitata CORS
+          tileImg.src = `https://tilecache.rainviewer.com${currentPath}/256/${currentZoom}/${x}/${y}/2/1_1.png`;
 
           tileImg.onload = function() {
-            const canvas = document.createElement('canvas');
-            canvas.width = 256;
-            canvas.height = 256;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(tileImg, 0, 0);
-
             try {
+              const canvas = document.createElement('canvas');
+              canvas.width = 256;
+              canvas.height = 256;
+              const ctx = canvas.getContext('2d', { willReadFrequently: true });
+              ctx.drawImage(tileImg, 0, 0);
+
               const imgData = ctx.getImageData(0, 0, 256, 256).data;
-              // Step adattivo in base allo zoom per evitare di sovraccaricare la mappa di punti inutili
-              const step = currentZoom < 5 ? 16 : 8;
+              const step = currentZoom < 5 ? 12 : 6;
 
               for (let px = 0; px < 256; px += step) {
                 for (let py = 0; py < 256; py += step) {
@@ -213,27 +211,25 @@
                   const b = imgData[i + 2];
                   const a = imgData[i + 3];
 
-                  // Identificazione dei riflettori intensi (Giallo/Arancio/Rosso/Viola)
-                  if (a > 100 && (r > 180 && g < 200)) {
+                  // Filtro cromatico per le intensità elevate (giallo/arancio/rosso/viola)
+                  if (a > 80 && (r > 160 && (g < 210 || b < 100))) {
                     
-                    // Calcolo preciso del punto globale basato sullo zoom CORRENTE della mappa
                     const globalX = x * 256 + px;
                     const globalY = y * 256 + py;
                     const latLng = map.unproject(L.point(globalX, globalY), currentZoom);
 
                     totalCells++;
 
-                    // Disegno vettoriale del cerchio direttamente nel layer SVG della mappa
                     const circle = L.circleMarker(latLng, {
-                      radius: 6,
+                      radius: 5,
                       color: '#ffffff',
-                      weight: 1.5,
+                      weight: 1.2,
                       fillColor: '#f43f5e',
-                      fillOpacity: 0.85,
+                      fillOpacity: 0.9,
                       className: 'storm-pulse'
                     });
 
-                    circle.bindPopup(`<b>Cella Convettiva</b><br>Riflettività: ≥32 dBZ<br>Lat: ${latLng.lat.toFixed(2)} | Lon: ${latLng.lng.toFixed(2)}`);
+                    circle.bindPopup(`<b>Nucleo Convettivo</b><br>Riflettività: ≥32 dBZ<br>Lat: ${latLng.lat.toFixed(2)} | Lon: ${latLng.lng.toFixed(2)}`);
                     stormGroup.addLayer(circle);
 
                     document.getElementById('cell-count').innerText = totalCells;
@@ -241,14 +237,16 @@
                 }
               }
             } catch (err) {
-              // Errore silenzioso se la tile è vuota o fuori raggio
+              // Isolamento dell'errore: se una tile va in blocco non interrompe le altre
             }
           };
+
+          // Gestione esplicita dell'errore di caricamento per evitare che il ciclo si blocchi
+          tileImg.onerror = function() {};
         }
       }
     }
 
-    // Ri-scansiona le mattonelle ad ogni spostamento o cambio zoom
     map.on('moveend', scanVisibleTiles);
 
     updateRadar();
