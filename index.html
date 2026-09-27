@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Storm Tracker Continentale - Nowcasting Italia</title>
+  <title>Global Storm Tracker - Nowcasting Italia</title>
   
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   
@@ -69,20 +69,13 @@
       font-size: 11px;
     }
 
-    /* Cerchio pulsante ad alto contrasto visibile su sfondo scuro/radar */
-    @keyframes pulseCircle {
-      0% { transform: scale(1); opacity: 0.9; }
-      50% { transform: scale(1.4); opacity: 0.4; }
-      100% { transform: scale(1); opacity: 0.9; }
+    @keyframes pulseSVG {
+      0% { stroke-width: 2; fill-opacity: 0.8; }
+      50% { stroke-width: 6; fill-opacity: 0.2; }
+      100% { stroke-width: 2; fill-opacity: 0.8; }
     }
-    .storm-pulse-node {
-      width: 14px;
-      height: 14px;
-      background: #f43f5e;
-      border: 2px solid #ffffff;
-      border-radius: 50%;
-      box-shadow: 0 0 8px #f43f5e;
-      animation: pulseCircle 1s infinite ease-in-out;
+    .storm-circle-svg {
+      animation: pulseSVG 1.2s infinite ease-in-out;
     }
   </style>
 </head>
@@ -146,7 +139,7 @@
       const target = continents[key];
       map.flyTo(target.center, target.zoom, { duration: 1.0 });
 
-      setTimeout(scanPixelRadar, 1200);
+      setTimeout(processRadarData, 1000);
     }
 
     async function updateRadar() {
@@ -170,102 +163,85 @@
         const timeString = new Date(lastFrame.time * 1000).toLocaleString('it-IT');
         document.getElementById('status-display').innerHTML = `<b>Radar Live:</b> ${timeString}`;
 
-        scanPixelRadar();
+        processRadarData();
 
       } catch (e) {
         console.error("Errore sincro radar:", e);
       }
     }
 
-    function scanPixelRadar() {
+    function processRadarData() {
       markersGroup.clearLayers();
       if (!currentRadarPath) return;
 
       const bounds = map.getBounds();
-      // Zoom di scansione fisso a 5 per far combaciare esattamente Pixel e Lat/Lon
-      const scanZoom = 5;
+      const z = 5;
 
-      const nwPoint = map.project(bounds.getNorthWest(), scanZoom);
-      const sePoint = map.project(bounds.getSouthEast(), scanZoom);
+      const nw = map.project(bounds.getNorthWest(), z);
+      const se = map.project(bounds.getSouthEast(), z);
 
-      const minTileX = Math.floor(nwPoint.x / 256);
-      const maxTileX = Math.floor(sePoint.x / 256);
-      const minTileY = Math.floor(nwPoint.y / 256);
-      const maxTileY = Math.floor(sePoint.y / 256);
+      const minX = Math.floor(nw.x / 256);
+      const maxX = Math.floor(se.x / 256);
+      const minY = Math.floor(nw.y / 256);
+      const maxY = Math.floor(se.y / 256);
 
-      let totalCells = 0;
-      const points = [];
+      let cellCount = 0;
 
-      for (let x = minTileX; x <= maxTileX; x++) {
-        for (let y = minTileY; y <= maxTileY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        for (let y = minY; y <= maxY; y++) {
           
-          const tileUrl = `https://tilecache.rainviewer.com${currentRadarPath}/256/${scanZoom}/${x}/${y}/2/1_1.png`;
-          const proxiedUrl = `https://corsproxy.io/?${encodeURIComponent(tileUrl)}`;
-
           const img = new Image();
-          img.crossOrigin = "anonymous";
-          img.src = proxiedUrl;
+          img.crossOrigin = "Anonymous";
+          img.src = `https://corsproxy.io/?${encodeURIComponent(`https://tilecache.rainviewer.com${currentRadarPath}/256/${z}/${x}/${y}/2/1_1.png`)}`;
 
           img.onload = function() {
-            const cvs = document.createElement('canvas');
-            cvs.width = 256;
-            cvs.height = 256;
-            const ctx = cvs.getContext('2d');
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 256;
+            const ctx = canvas.getContext('2d');
             ctx.drawImage(img, 0, 0);
 
             try {
-              const pixelData = ctx.getImageData(0, 0, 256, 256).data;
+              const data = ctx.getImageData(0, 0, 256, 256).data;
 
-              for (let px = 0; px < 256; px += 10) {
-                for (let py = 0; py < 256; py += 10) {
+              for (let px = 0; px < 256; px += 12) {
+                for (let py = 0; py < 256; py += 12) {
                   const idx = (py * 256 + px) * 4;
-                  const r = pixelData[idx];
-                  const g = pixelData[idx + 1];
-                  const b = pixelData[idx + 2];
-                  const a = pixelData[idx + 3];
+                  const r = data[idx];
+                  const g = data[idx + 1];
+                  const b = data[idx + 2];
+                  const a = data[idx + 3];
 
-                  if (a < 60) continue;
+                  if (a > 80 && r > 180 && g < 180) { // Riflettività convettiva ≥32 dBZ
+                    const worldX = x * 256 + px;
+                    const worldY = y * 256 + py;
+                    const latLng = map.unproject(L.point(worldX, worldY), z);
 
-                  // Filtro cromatico rigido per dBZ >= 32
-                  const isYellow = (r > 200 && g > 165 && b < 100);
-                  const isOrange = (r > 210 && g >= 85 && g <= 165 && b < 80);
-                  const isRedPurple = (r > 175 && g < 85);
+                    cellCount++;
 
-                  if (isYellow || isOrange || isRedPurple) {
-                    const globalX = x * 256 + px;
-                    const globalY = y * 256 + py;
-                    
-                    // Conversione diretta da Coordinate Globali Pixel a Lat/Lon Leaflet
-                    const latLng = map.unproject([globalX, globalY], scanZoom);
+                    const circle = L.circleMarker(latLng, {
+                      radius: 7,
+                      color: '#ffffff',
+                      weight: 1.5,
+                      fillColor: '#f43f5e',
+                      fillOpacity: 0.85,
+                      className: 'storm-circle-svg'
+                    });
 
-                    const tooClose = points.some(p => map.distance(p, latLng) < 20000);
+                    circle.bindPopup(`<b>Nucleo Convettivo</b><br>Riflettività: ≥32 dBZ<br>Lat: ${latLng.lat.toFixed(2)} | Lon: ${latLng.lng.toFixed(2)}`);
+                    markersGroup.addLayer(circle);
 
-                    if (!tooClose) {
-                      points.push(latLng);
-                      totalCells++;
-
-                      const pulseIcon = L.divIcon({
-                        className: 'storm-pulse-node',
-                        iconSize: [14, 14],
-                        iconAnchor: [7, 7]
-                      });
-
-                      const marker = L.marker(latLng, { icon: pulseIcon });
-                      marker.bindPopup(`<b>Nucleo Convettivo</b><br>Riflettività: ≥32 dBZ<br>Lat: ${latLng.lat.toFixed(2)} | Lon: ${latLng.lng.toFixed(2)}`);
-                      markersGroup.addLayer(marker);
-
-                      document.getElementById('cell-count').innerText = totalCells;
-                    }
+                    document.getElementById('cell-count').innerText = cellCount;
                   }
                 }
               }
-            } catch(e) {}
+            } catch (err) {}
           };
         }
       }
     }
 
-    map.on('moveend', scanPixelRadar);
+    map.on('moveend', processRadarData);
     updateRadar();
     setInterval(updateRadar, 300000);
   </script>
