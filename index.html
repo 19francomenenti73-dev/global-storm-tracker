@@ -170,7 +170,6 @@
       }
     }
 
-    // Scansione REALE dei Pixel sulla Vista Corrente
     function scanPixelRadar() {
       markersGroup.clearLayers();
       if (!currentRadarPath) return;
@@ -187,9 +186,13 @@
       for (let x = nw.x; x <= se.x; x++) {
         for (let y = nw.y; y <= se.y; y++) {
           
+          const tileUrl = `https://tilecache.rainviewer.com${currentRadarPath}/256/${zoom}/${x}/${y}/2/1_1.png`;
+          // Proxy CORS per sbloccare l'accesso ai pixel nell'iframe di Google Sites
+          const proxiedUrl = `https://corsproxy.io/?${encodeURIComponent(tileUrl)}`;
+
           const img = new Image();
           img.crossOrigin = "anonymous";
-          img.src = `https://tilecache.rainviewer.com${currentRadarPath}/256/${zoom}/${x}/${y}/2/1_1.png`;
+          img.src = proxiedUrl;
 
           img.onload = function() {
             const cvs = document.createElement('canvas');
@@ -201,7 +204,6 @@
             try {
               const pixelData = ctx.getImageData(0, 0, 256, 256).data;
 
-              // Scansione a passo 8px per massima precisione
               for (let px = 0; px < 256; px += 8) {
                 for (let py = 0; py < 256; py += 8) {
                   const idx = (py * 256 + px) * 4;
@@ -210,9 +212,9 @@
                   const b = pixelData[idx + 2];
                   const a = pixelData[idx + 3];
 
-                  if (a < 50) continue; // Salta aree trasparenti
+                  if (a < 50) continue;
 
-                  // Riconoscimento cromatico dBZ >= 32 (Giallo, Arancio, Rosso, Viola)
+                  // Riflettività ≥32 dBZ (Giallo, Arancio, Rosso, Viola)
                   const isYellow = (r > 200 && g > 170 && b < 100);
                   const isOrange = (r > 210 && g >= 90 && g <= 170 && b < 80);
                   const isRedPurple = (r > 180 && g < 90);
@@ -222,14 +224,12 @@
                     const gy = y * 256 + py;
                     const latLng = map.unproject([gx, gy], zoom);
 
-                    // Distanziamento 25km per non affollare la mappa di cerchietti sovrapposti
                     const isDuplicate = foundPoints.some(p => map.distance(p, latLng) < 25000);
 
                     if (!isDuplicate) {
                       foundPoints.push(latLng);
                       count++;
 
-                      // Cerchio Vettoriale Reale SVG
                       const circle = L.circleMarker(latLng, {
                         radius: 8,
                         color: '#f43f5e',
